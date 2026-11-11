@@ -2,6 +2,7 @@
 import {
   View,
   Text,
+  ActivityIndicator,
   FlatList,
   Pressable,
   StyleSheet,
@@ -11,7 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useHabits } from '../../contexts/HabitsContext';
 
 export default function HabitsScreen() {
-  const { habits } = useHabits();
+  const { habits, loading, error } = useHabits();
 
   function renderHabit({ item }) {
     return (
@@ -56,6 +57,37 @@ export default function HabitsScreen() {
     );
   }
 
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator
+          size="large"
+          color="#2563EB"
+        />
+
+        <Text style={styles.statusText}>
+          Carregando hábitos...
+        </Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.center}>
+        <Ionicons
+          name="cloud-offline-outline"
+          size={48}
+          color="#DC2626"
+        />
+
+        <Text style={styles.statusText}>
+          {error}
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -72,6 +104,7 @@ export default function HabitsScreen() {
             size={20}
             color="#FFFFFF"
           />
+
           <Text style={styles.addButtonText}>
             Novo
           </Text>
@@ -109,6 +142,19 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
+  },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    padding: 24,
+  },
+  statusText: {
+    fontSize: 16,
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: 12,
   },
   header: {
     paddingHorizontal: 20,
