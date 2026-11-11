@@ -5,40 +5,60 @@ import {
   Text,
   TextInput,
   Pressable,
-  StyleSheet,
   ScrollView,
-  Alert,
+  StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useHabits } from '../../contexts/HabitsContext';
 
 export default function NewHabitScreen() {
-  const { addHabit } = useHabits();
+  const { addHabit, userId } = useHabits();
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [frequency, setFrequency] = useState('Diário');
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  function handleSave() {
+  async function handleSave() {
+    if (saving) return;
+
     const cleanName = name.trim();
+    const cleanDescription = description.trim();
 
     if (cleanName.length < 3) {
       setError('O nome deve ter pelo menos 3 caracteres.');
       return;
     }
 
+    if (cleanName.length > 60) {
+      setError('O nome deve ter no máximo 60 caracteres.');
+      return;
+    }
+
+    if (cleanDescription.length > 200) {
+      setError('A descrição deve ter no máximo 200 caracteres.');
+      return;
+    }
+
     setError('');
+    setSaving(true);
 
-    addHabit({
-      name: cleanName,
-      description: description.trim(),
-      frequency,
-      createdAt: new Date().toISOString(),
-    });
+    try {
+      await addHabit({
+        name: cleanName,
+        description: cleanDescription,
+        frequency,
+      });
 
-    Alert.alert('Sucesso', 'Hábito cadastrado com sucesso!');
-    router.back();
+      router.back();
+    } catch (err) {
+      console.error('Erro ao cadastrar hábito:', err);
+      setError('Não foi possível salvar o hábito. Tente novamente.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -47,44 +67,49 @@ export default function NewHabitScreen() {
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.label}>Nome do hábito *</Text>
+      <Text style={styles.title}>Novo hábito</Text>
 
+      <Text style={styles.label}>Nome do hábito *</Text>
       <TextInput
         style={styles.input}
-        placeholder="Ex.: Ler 20 minutos"
         value={name}
-        onChangeText={(text) => {
-          setName(text);
+        onChangeText={(value) => {
+          setName(value);
           setError('');
         }}
+        placeholder="Ex.: Estudar React Native"
         maxLength={60}
+        editable={!saving}
       />
 
-      {error ? (
-        <Text style={styles.error}>{error}</Text>
-      ) : null}
+      <Text style={styles.counter}>{name.length}/60</Text>
 
       <Text style={styles.label}>Descrição</Text>
-
       <TextInput
         style={[styles.input, styles.textArea]}
-        placeholder="Descreva seu objetivo"
         value={description}
         onChangeText={setDescription}
+        placeholder="Descreva seu hábito"
         multiline
         maxLength={200}
+        editable={!saving}
         textAlignVertical="top"
       />
 
+      <Text style={styles.counter}>
+        {description.length}/200
+      </Text>
+
       <Text style={styles.label}>Frequência</Text>
 
-      <View style={styles.frequencyContainer}>
+      <View style={styles.frequencyRow}>
         {['Diário', 'Semanal'].map((option) => (
           <Pressable
             key={option}
+            disabled={saving}
             style={[
               styles.frequencyButton,
-              frequency === option && styles.selectedButton,
+              frequency === option && styles.selected,
             ]}
             onPress={() => setFrequency(option)}
           >
@@ -100,11 +125,25 @@ export default function NewHabitScreen() {
         ))}
       </View>
 
+      {error ? (
+        <Text style={styles.error}>{error}</Text>
+      ) : null}
+
       <Pressable
-        style={styles.saveButton}
+        style={[
+          styles.button,
+          (!userId || saving) && styles.disabledButton,
+        ]}
         onPress={handleSave}
+        disabled={!userId || saving}
       >
-        <Text style={styles.saveText}>Salvar hábito</Text>
+        {saving ? (
+          <ActivityIndicator color="#FFFFFF" />
+        ) : (
+          <Text style={styles.buttonText}>
+            {userId ? 'Salvar hábito' : 'Conectando ao Firebase...'}
+          </Text>
+        )}
       </Pressable>
     </ScrollView>
   );
@@ -119,12 +158,18 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 40,
   },
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#1E293B',
+    marginBottom: 20,
+  },
   label: {
     fontSize: 16,
     fontWeight: '600',
     color: '#1E293B',
-    marginBottom: 8,
     marginTop: 16,
+    marginBottom: 8,
   },
   input: {
     backgroundColor: '#FFFFFF',
@@ -136,27 +181,28 @@ const styles = StyleSheet.create({
     color: '#1E293B',
   },
   textArea: {
-    height: 110,
+    minHeight: 110,
   },
-  error: {
-    color: '#DC2626',
-    fontSize: 13,
-    marginTop: 6,
+  counter: {
+    color: '#94A3B8',
+    fontSize: 12,
+    textAlign: 'right',
+    marginTop: 4,
   },
-  frequencyContainer: {
+  frequencyRow: {
     flexDirection: 'row',
     gap: 12,
   },
   frequencyButton: {
     flex: 1,
-    padding: 14,
-    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#CBD5E1',
+    padding: 14,
+    borderRadius: 10,
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
   },
-  selectedButton: {
+  selected: {
     backgroundColor: '#2563EB',
     borderColor: '#2563EB',
   },
@@ -167,17 +213,22 @@ const styles = StyleSheet.create({
   selectedText: {
     color: '#FFFFFF',
   },
-  errorText: {
+  error: {
     color: '#DC2626',
+    marginTop: 18,
+    fontSize: 14,
   },
-  saveButton: {
+  button: {
     backgroundColor: '#2563EB',
-    padding: 16,
     borderRadius: 10,
+    padding: 16,
     alignItems: 'center',
-    marginTop: 32,
+    marginTop: 28,
   },
-  saveText: {
+  disabledButton: {
+    opacity: 0.6,
+  },
+  buttonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: 'bold',

@@ -10,6 +10,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,12 +18,20 @@ import { useHabits } from '../../contexts/HabitsContext';
 
 export default function HabitDetailsScreen() {
   const { id } = useLocalSearchParams();
-  const { habits, updateHabit, deleteHabit } = useHabits();
+
+  const {
+    habits,
+    updateHabit,
+    deleteHabit,
+    loading,
+    error: loadingError,
+  } = useHabits();
 
   const habit = habits.find((item) => item.id === id);
 
   const [editing, setEditing] = useState(false);
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+
   const [name, setName] = useState(habit?.name ?? '');
   const [description, setDescription] = useState(
     habit?.description ?? ''
@@ -30,22 +39,26 @@ export default function HabitDetailsScreen() {
   const [frequency, setFrequency] = useState(
     habit?.frequency ?? 'Diário'
   );
+
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   function handleEdit() {
-    if (!habit) return;
+    if (!habit || saving || deleting) return;
 
     setName(habit.name);
     setDescription(habit.description ?? '');
-    setFrequency(habit.frequency);
+    setFrequency(habit.frequency ?? 'Diário');
+
     setError('');
     setSuccess('');
     setEditing(true);
   }
 
-  function handleSave() {
-    if (!habit) return;
+  async function handleSave() {
+    if (!habit || saving || deleting) return;
 
     const cleanName = name.trim();
     const cleanDescription = description.trim();
@@ -65,33 +78,103 @@ export default function HabitDetailsScreen() {
       return;
     }
 
-    updateHabit({
-      id: habit.id,
-      name: cleanName,
-      description: cleanDescription,
-      frequency,
-    });
-
     setError('');
-    setEditing(false);
-    setSuccess('Hábito atualizado com sucesso!');
+    setSuccess('');
+    setSaving(true);
+
+    try {
+      await updateHabit({
+        id: habit.id,
+        name: cleanName,
+        description: cleanDescription,
+        frequency,
+      });
+
+      setEditing(false);
+      setSuccess('Hábito atualizado com sucesso!');
+    } catch (err) {
+      console.error('Erro ao atualizar hábito:', err);
+      setError('Não foi possível atualizar o hábito. Tente novamente.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   function handleCancel() {
+    if (saving) return;
+
     setEditing(false);
     setError('');
   }
 
   function handleDelete() {
+    if (saving || deleting) return;
+
+    setError('');
+    setSuccess('');
     setDeleteModalVisible(true);
   }
 
-  function confirmDelete() {
-    if (!habit) return;
+  async function confirmDelete() {
+    if (!habit || deleting) return;
 
-    setDeleteModalVisible(false);
-    deleteHabit(habit.id);
-    router.replace('/habits');
+    setDeleting(true);
+    setError('');
+
+    try {
+      await deleteHabit(habit.id);
+
+      setDeleteModalVisible(false);
+      router.replace('/habits');
+    } catch (err) {
+      console.error('Erro ao excluir hábito:', err);
+
+      setDeleteModalVisible(false);
+      setError('Não foi possível excluir o hábito. Tente novamente.');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color="#2563EB" />
+
+        <Text style={styles.loadingText}>
+          Carregando hábito...
+        </Text>
+      </View>
+    );
+  }
+
+  if (loadingError) {
+    return (
+      <View style={styles.center}>
+        <Ionicons
+          name="cloud-offline-outline"
+          size={48}
+          color="#DC2626"
+        />
+
+        <Text style={styles.title}>
+          Erro ao carregar hábito
+        </Text>
+
+        <Text style={styles.description}>
+          {loadingError}
+        </Text>
+
+        <Pressable
+          style={styles.button}
+          onPress={() => router.replace('/habits')}
+        >
+          <Text style={styles.buttonText}>
+            Voltar para hábitos
+          </Text>
+        </Pressable>
+      </View>
+    );
   }
 
   if (!habit) {
@@ -108,8 +191,7 @@ export default function HabitDetailsScreen() {
         </Text>
 
         <Text style={styles.description}>
-          O hábito pode ter sido removido ou os dados
-          ainda não foram carregados.
+          Este hábito pode ter sido removido.
         </Text>
 
         <Pressable
@@ -153,6 +235,7 @@ export default function HabitDetailsScreen() {
               }}
               placeholder="Digite o nome do hábito"
               maxLength={60}
+              editable={!saving}
             />
 
             <Text style={styles.counter}>
@@ -170,6 +253,7 @@ export default function HabitDetailsScreen() {
               placeholder="Descreva seu hábito"
               multiline
               maxLength={200}
+              editable={!saving}
               textAlignVertical="top"
             />
 
@@ -185,9 +269,11 @@ export default function HabitDetailsScreen() {
               {['Diário', 'Semanal'].map((option) => (
                 <Pressable
                   key={option}
+                  disabled={saving}
                   style={[
                     styles.frequencyButton,
                     frequency === option && styles.selected,
+                    saving && styles.disabledButton,
                   ]}
                   onPress={() => setFrequency(option)}
                 >
@@ -217,22 +303,33 @@ export default function HabitDetailsScreen() {
             ) : null}
 
             <Pressable
-              style={styles.button}
+              style={[
+                styles.button,
+                saving && styles.disabledButton,
+              ]}
               onPress={handleSave}
+              disabled={saving}
             >
-              <Ionicons
-                name="save-outline"
-                size={20}
-                color="#FFFFFF"
-              />
-              <Text style={styles.buttonText}>
-                Salvar alterações
-              </Text>
+              {saving ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <>
+                  <Ionicons
+                    name="save-outline"
+                    size={20}
+                    color="#FFFFFF"
+                  />
+                  <Text style={styles.buttonText}>
+                    Salvar alterações
+                  </Text>
+                </>
+              )}
             </Pressable>
 
             <Pressable
               style={styles.secondaryButton}
               onPress={handleCancel}
+              disabled={saving}
             >
               <Text style={styles.secondaryText}>
                 Cancelar
@@ -254,6 +351,19 @@ export default function HabitDetailsScreen() {
                 />
                 <Text style={styles.successText}>
                   {success}
+                </Text>
+              </View>
+            ) : null}
+
+            {error ? (
+              <View style={styles.errorBox}>
+                <Ionicons
+                  name="alert-circle-outline"
+                  size={18}
+                  color="#DC2626"
+                />
+                <Text style={styles.errorText}>
+                  {error}
                 </Text>
               </View>
             ) : null}
@@ -322,7 +432,11 @@ export default function HabitDetailsScreen() {
         visible={deleteModalVisible}
         transparent
         animationType="fade"
-        onRequestClose={() => setDeleteModalVisible(false)}
+        onRequestClose={() => {
+          if (!deleting) {
+            setDeleteModalVisible(false);
+          }
+        }}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -345,7 +459,11 @@ export default function HabitDetailsScreen() {
 
             <View style={styles.modalButtons}>
               <Pressable
-                style={styles.cancelButton}
+                style={[
+                  styles.cancelButton,
+                  deleting && styles.disabledButton,
+                ]}
+                disabled={deleting}
                 onPress={() => setDeleteModalVisible(false)}
               >
                 <Text style={styles.cancelText}>
@@ -354,12 +472,20 @@ export default function HabitDetailsScreen() {
               </Pressable>
 
               <Pressable
-                style={styles.confirmDeleteButton}
+                style={[
+                  styles.confirmDeleteButton,
+                  deleting && styles.disabledButton,
+                ]}
+                disabled={deleting}
                 onPress={confirmDelete}
               >
-                <Text style={styles.confirmDeleteText}>
-                  Excluir
-                </Text>
+                {deleting ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.confirmDeleteText}>
+                    Excluir
+                  </Text>
+                )}
               </Pressable>
             </View>
           </View>
@@ -384,6 +510,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 24,
     backgroundColor: '#F8FAFC',
+  },
+  loadingText: {
+    marginTop: 14,
+    fontSize: 15,
+    color: '#64748B',
   },
   screenTitle: {
     fontSize: 24,
@@ -520,6 +651,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  disabledButton: {
+    opacity: 0.6,
+  },
   errorBox: {
     backgroundColor: '#FEF2F2',
     borderRadius: 10,
@@ -528,6 +662,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginTop: 20,
+    marginBottom: 16,
   },
   errorText: {
     color: '#DC2626',
