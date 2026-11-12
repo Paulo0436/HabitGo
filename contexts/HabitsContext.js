@@ -15,9 +15,21 @@ import {
   createHabit,
   editHabit,
   removeHabit,
+  completeHabit,
+  uncompleteHabit,
 } from '../services/habits';
 
 const HabitsContext = createContext(null);
+
+function getTodayDate() {
+  const today = new Date();
+
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
 
 export function HabitsProvider({ children }) {
   const [habits, setHabits] = useState([]);
@@ -106,6 +118,22 @@ export function HabitsProvider({ children }) {
     await removeHabit(userId, id);
   }
 
+  async function completeHabitToday(habitId) {
+    if (!userId) {
+      throw new Error('Usuário ainda não autenticado.');
+    }
+
+    await completeHabit(userId, habitId, getTodayDate());
+  }
+
+  async function uncompleteHabitToday(habitId) {
+    if (!userId) {
+      throw new Error('Usuário ainda não autenticado.');
+    }
+
+    await uncompleteHabit(userId, habitId, getTodayDate());
+  }
+
   return (
     <HabitsContext.Provider
       value={{
@@ -116,6 +144,8 @@ export function HabitsProvider({ children }) {
         addHabit,
         updateHabit,
         deleteHabit,
+        completeHabitToday,
+        uncompleteHabitToday,
       }}
     >
       {children}
