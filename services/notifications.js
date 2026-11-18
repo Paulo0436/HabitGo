@@ -38,7 +38,11 @@ export async function requestNotificationPermission() {
   return requestedPermissions.granted;
 }
 
-export async function scheduleDailyReminder(hour, minute) {
+export async function scheduleDailyReminder(
+  hour,
+  minute,
+  habitName = null
+) {
   if (Platform.OS === 'web') {
     return null;
   }
@@ -54,8 +58,12 @@ export async function scheduleDailyReminder(hour, minute) {
   const notificationId =
     await Notifications.scheduleNotificationAsync({
       content: {
-        title: 'Hora dos seus hábitos! 🌱',
-        body: 'Reserve um momento para registrar seus hábitos no HabitGo.',
+        title: habitName
+          ? `Hora de ${habitName}! 🌱`
+          : 'Hora dos seus hábitos! 🌱',
+        body: habitName
+          ? `Não se esqueça de realizar seu hábito: ${habitName}.`
+          : 'Reserve um momento para registrar seus hábitos no HabitGo.',
         sound: 'default',
       },
       trigger: {
