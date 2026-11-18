@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -13,154 +13,433 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { useHabits } from '../../contexts/HabitsContext';
 import {
   scheduleDailyReminder,
   cancelDailyReminder,
 } from '../../services/notifications';
 
-const STORAGE_KEY = '@habitgo:notification-settings';
+const STORAGE_KEY = '@habitgo:habit-notifications';
+const OLD_STORAGE_KEY = '@habitgo:notification-settings';
+
+function formatTime(value) {
+  return String(value).padStart(2, '0');
+}
 
 export default function SettingsScreen() {
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [selectedHour, setSelectedHour] = useState(8);
-  const [selectedMinute, setSelectedMinute] = useState(0);
-  const [notificationId, setNotificationId] = useState(null);
+  const { habits, loading: habitsLoading, error } = useHabits();
+
+  const [reminders, setReminders] = useState({});
+  const [draftTimes, setDraftTimes] = useState({});
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [savingId, setSavingId] = useState(null);
   const [message, setMessage] = useState('');
 
-  const formatTime = (value) => String(value).padStart(2, '0');
+  const remindersRef = useRef({});
+  const busyRef = useRef(false);
 
   useEffect(() => {
+    let active = true;
+
     async function loadSettings() {
       try {
-        const saved = await AsyncStorage.getItem(STORAGE_KEY);
+        const [saved, oldSaved] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_KEY),
+          AsyncStorage.getItem(OLD_STORAGE_KEY),
+        ]);
 
-        if (saved) {
-          const settings = JSON.parse(saved);
+        const settings = saved ? JSON.parse(saved) : {};
 
-          setNotificationsEnabled(
-            settings.enabled === true && Platform.OS !== 'web'
-          );
-          setSelectedHour(settings.hour ?? 8);
-          setSelectedMinute(settings.minute ?? 0);
-          setNotificationId(settings.notificationId ?? null);
+        if (oldSaved && Platform.OS !== 'web') {
+          const previous = JSON.parse(oldSaved);
+
+          if (previous.notificationId) {
+            await cancelDailyReminder(previous.notificationId);
+          }
+
+          await AsyncStorage.removeItem(OLD_STORAGE_KEY);
         }
-      } catch {
-        setMessage('Não foi possível carregar as configurações.');
+
+        if (!active) return;
+
+        remindersRef.current = settings;
+        setReminders(settings);
+
+        const times = {};
+
+        Object.entries(settings).forEach(([id, value]) => {
+          times[id] = {
+            hour: value.hour ?? 8,
+            minute: value.minute ?? 0,
+          };
+        });
+
+        setDraftTimes(times);
+      } catch (err) {
+        console.error('Erro ao carregar lembretes:', err);
+
+        if (active) {
+          setMessage('Não foi possível carregar os lembretes.');
+        }
       } finally {
-        setLoading(false);
+        if (active) {
+          setLoading(false);
+        }
       }
     }
 
     loadSettings();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  async function saveSettings(enabled, hour, minute, id) {
-    await AsyncStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        enabled,
-        hour,
-        minute,
-        notificationId: id,
-      })
-    );
-  }
+  useEffect(() => {
+    if (loading || habitsLoading || busyRef.current) return;
 
-  async function updateReminder(enabled, hour, minute) {
-    if (saving) {
-      return;
+    let cancelled = false;
+
+    async function removeDeletedHabits() {
+      const current = remindersRef.current;
+      const validIds = new Set(habits.map((habit) => habit.id));
+
+      const removedIds = Object.keys(current).filter(
+        (id) => !validIds.has(id)
+      );
+
+      if (removedIds.length === 0) return;
+
+      busyRef.current = true;
+
+      try {
+        for (const id of removedIds) {
+          if (current[id]?.notificationId) {
+            await cancelDailyReminder(current[id].notificationId);
+          }
+        }
+
+        const updated = { ...remindersRef.current };
+
+        removedIds.forEach((id) => {
+          delete updated[id];
+        });
+
+        await AsyncStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(updated)
+        );
+
+        if (!cancelled) {
+          remindersRef.current = updated;
+          setReminders(updated);
+        }
+      } catch (err) {
+        console.error('Erro ao limpar lembretes:', err);
+      } finally {
+        busyRef.current = false;
+      }
     }
 
-    setSaving(true);
+    removeDeletedHabits();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [habits, habitsLoading, loading, reminders]);
+
+  async function updateReminder(habit, enabled, hour, minute) {
+    if (busyRef.current || Platform.OS === 'web') return;
+
+    busyRef.current = true;
+    setSavingId(habit.id);
     setMessage('');
 
+    const previous = remindersRef.current[habit.id];
+    let newNotificationId = null;
+
     try {
-      if (Platform.OS === 'web') {
-        setMessage(
-          'Os lembretes estão disponíveis no aplicativo Android.'
-        );
-        return;
-      }
-
-      let newNotificationId = null;
-
       if (enabled) {
         newNotificationId = await scheduleDailyReminder(
           hour,
-          minute
+          minute,
+          habit.name
         );
       }
 
-      if (notificationId) {
-        await cancelDailyReminder(notificationId);
-      }
+      const updated = {
+        ...remindersRef.current,
+        [habit.id]: {
+          enabled,
+          hour,
+          minute,
+          notificationId: newNotificationId,
+        },
+      };
 
-      await saveSettings(
-        enabled,
-        hour,
-        minute,
-        newNotificationId
+      await AsyncStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(updated)
       );
 
-      setNotificationsEnabled(enabled);
-      setSelectedHour(hour);
-      setSelectedMinute(minute);
-      setNotificationId(newNotificationId);
+      remindersRef.current = updated;
+      setReminders(updated);
+
+      setDraftTimes((current) => ({
+        ...current,
+        [habit.id]: { hour, minute },
+      }));
+
+      if (previous?.notificationId) {
+        try {
+          await cancelDailyReminder(previous.notificationId);
+        } catch (cancelError) {
+          console.error(
+            'Erro ao cancelar lembrete anterior:',
+            cancelError
+          );
+          setMessage(
+            'Configuração salva, mas não foi possível cancelar o lembrete anterior.'
+          );
+          return;
+        }
+      }
 
       setMessage(
         enabled
-          ? `Lembrete diário configurado para ${formatTime(hour)}:${formatTime(minute)}.`
-          : 'Lembretes desativados.'
+          ? `Lembrete de ${habit.name} configurado para ${formatTime(hour)}:${formatTime(minute)}.`
+          : `Lembrete de ${habit.name} desativado.`
       );
-    } catch (error) {
+    } catch (err) {
+      if (newNotificationId) {
+        try {
+          await cancelDailyReminder(newNotificationId);
+        } catch (cancelError) {
+          console.error(
+            'Erro ao desfazer agendamento:',
+            cancelError
+          );
+        }
+      }
+
       const errorMessage =
-        error?.message ??
-        'Não foi possível atualizar o lembrete.';
+        err?.message ?? 'Não foi possível salvar o lembrete.';
 
       setMessage(errorMessage);
-
-      if (Platform.OS !== 'web') {
-        Alert.alert('Notificações', errorMessage);
-      }
+      Alert.alert('Notificações', errorMessage);
     } finally {
-      setSaving(false);
+      busyRef.current = false;
+      setSavingId(null);
     }
   }
 
-  function changeHour(amount) {
-    const nextHour = (selectedHour + amount + 24) % 24;
+  function changeTime(habitId, field, amount) {
+    setDraftTimes((current) => {
+      const saved = remindersRef.current[habitId];
 
-    if (notificationsEnabled) {
-      updateReminder(true, nextHour, selectedMinute);
-    } else {
-      setSelectedHour(nextHour);
-      saveSettings(false, nextHour, selectedMinute, null)
-        .catch(() => {
-          setMessage('Não foi possível salvar o horário.');
-        });
-    }
+      const previous = current[habitId] ?? {
+        hour: saved?.hour ?? 8,
+        minute: saved?.minute ?? 0,
+      };
+
+      const limit = field === 'hour' ? 24 : 60;
+
+      return {
+        ...current,
+        [habitId]: {
+          ...previous,
+          [field]: (previous[field] + amount + limit) % limit,
+        },
+      };
+    });
   }
 
-  function changeMinute(amount) {
-    const nextMinute = (selectedMinute + amount + 60) % 60;
+  function renderHabit(habit) {
+    const saved = reminders[habit.id] ?? {
+      enabled: false,
+      hour: 8,
+      minute: 0,
+    };
 
-    if (notificationsEnabled) {
-      updateReminder(true, selectedHour, nextMinute);
-    } else {
-      setSelectedMinute(nextMinute);
-      saveSettings(false, selectedHour, nextMinute, null)
-        .catch(() => {
-          setMessage('Não foi possível salvar o horário.');
-        });
-    }
+    const draft = draftTimes[habit.id] ?? {
+      hour: saved.hour,
+      minute: saved.minute,
+    };
+
+    const isSaving = savingId === habit.id;
+    const disabled =
+      Platform.OS === 'web' || savingId !== null;
+
+    const hasChanges =
+      draft.hour !== saved.hour ||
+      draft.minute !== saved.minute;
+
+    return (
+      <View key={habit.id} style={styles.habitCard}>
+        <View style={styles.habitHeader}>
+          <View style={styles.habitIcon}>
+            <Ionicons
+              name="leaf-outline"
+              size={22}
+              color="#2563EB"
+            />
+          </View>
+
+          <View style={styles.habitInfo}>
+            <Text style={styles.habitName}>
+              {habit.name}
+            </Text>
+
+            <Text style={styles.habitStatus}>
+              {saved.enabled
+                ? `Ativado às ${formatTime(saved.hour)}:${formatTime(saved.minute)}`
+                : 'Lembrete desativado'}
+            </Text>
+          </View>
+
+          <Switch
+            value={saved.enabled}
+            disabled={disabled}
+            onValueChange={(enabled) =>
+              updateReminder(
+                habit,
+                enabled,
+                draft.hour,
+                draft.minute
+              )
+            }
+            trackColor={{
+              false: '#CBD5E1',
+              true: '#93C5FD',
+            }}
+            thumbColor={
+              saved.enabled ? '#2563EB' : '#F1F5F9'
+            }
+          />
+        </View>
+
+        <View style={styles.timeSection}>
+          <Text style={styles.timeTitle}>
+            Horário do lembrete
+          </Text>
+
+          <View style={styles.timePicker}>
+            <View style={styles.timeControl}>
+              <Pressable
+                style={styles.timeButton}
+                disabled={disabled}
+                onPress={() =>
+                  changeTime(habit.id, 'hour', 1)
+                }
+              >
+                <Ionicons
+                  name="chevron-up"
+                  size={23}
+                  color="#2563EB"
+                />
+              </Pressable>
+
+              <Text style={styles.timeNumber}>
+                {formatTime(draft.hour)}
+              </Text>
+
+              <Pressable
+                style={styles.timeButton}
+                disabled={disabled}
+                onPress={() =>
+                  changeTime(habit.id, 'hour', -1)
+                }
+              >
+                <Ionicons
+                  name="chevron-down"
+                  size={23}
+                  color="#2563EB"
+                />
+              </Pressable>
+            </View>
+
+            <Text style={styles.timeSeparator}>:</Text>
+
+            <View style={styles.timeControl}>
+              <Pressable
+                style={styles.timeButton}
+                disabled={disabled}
+                onPress={() =>
+                  changeTime(habit.id, 'minute', 1)
+                }
+              >
+                <Ionicons
+                  name="chevron-up"
+                  size={23}
+                  color="#2563EB"
+                />
+              </Pressable>
+
+              <Text style={styles.timeNumber}>
+                {formatTime(draft.minute)}
+              </Text>
+
+              <Pressable
+                style={styles.timeButton}
+                disabled={disabled}
+                onPress={() =>
+                  changeTime(habit.id, 'minute', -1)
+                }
+              >
+                <Ionicons
+                  name="chevron-down"
+                  size={23}
+                  color="#2563EB"
+                />
+              </Pressable>
+            </View>
+          </View>
+
+          <Pressable
+            style={[
+              styles.saveButton,
+              (disabled || !hasChanges) &&
+                styles.saveButtonDisabled,
+            ]}
+            disabled={disabled || !hasChanges}
+            onPress={() =>
+              updateReminder(
+                habit,
+                saved.enabled,
+                draft.hour,
+                draft.minute
+              )
+            }
+          >
+            {isSaving ? (
+              <ActivityIndicator
+                size="small"
+                color="#FFFFFF"
+              />
+            ) : (
+              <Ionicons
+                name="save-outline"
+                size={18}
+                color="#FFFFFF"
+              />
+            )}
+
+            <Text style={styles.saveButtonText}>
+              {isSaving ? 'Salvando...' : 'Salvar horário'}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    );
   }
 
-  if (loading) {
+  if (loading || habitsLoading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#2563EB" />
+        <ActivityIndicator
+          size="large"
+          color="#2563EB"
+        />
         <Text style={styles.loadingText}>
           Carregando configurações...
         </Text>
@@ -174,9 +453,12 @@ export default function SettingsScreen() {
       contentContainerStyle={styles.content}
     >
       <View style={styles.header}>
-        <Text style={styles.title}>Configurações</Text>
+        <Text style={styles.title}>
+          Configurações
+        </Text>
+
         <Text style={styles.subtitle}>
-          Personalize sua experiência no HabitGo.
+          Personalize os lembretes dos seus hábitos.
         </Text>
       </View>
 
@@ -192,132 +474,49 @@ export default function SettingsScreen() {
 
           <View style={styles.sectionInfo}>
             <Text style={styles.sectionTitle}>
-              Lembretes diários
+              Notificações dos hábitos
             </Text>
+
             <Text style={styles.sectionDescription}>
-              Receba um aviso para não esquecer seus hábitos.
+              Configure um horário para cada hábito.
             </Text>
           </View>
-
-          <Switch
-            value={notificationsEnabled}
-            onValueChange={(value) =>
-              updateReminder(value, selectedHour, selectedMinute)
-            }
-            disabled={saving || Platform.OS === 'web'}
-            trackColor={{
-              false: '#CBD5E1',
-              true: '#93C5FD',
-            }}
-            thumbColor={
-              notificationsEnabled ? '#2563EB' : '#F1F5F9'
-            }
-          />
         </View>
 
         {Platform.OS === 'web' && (
-          <Text style={styles.webNotice}>
-            Os lembretes estão disponíveis no Android.
+          <Text style={styles.notice}>
+            As notificações estão disponíveis no aplicativo Android.
           </Text>
         )}
 
-        {notificationsEnabled && (
-          <View style={styles.timeSection}>
-            <Text style={styles.timeTitle}>
-              Horário do lembrete
+        {error ? (
+          <Text style={styles.errorText}>
+            {error}
+          </Text>
+        ) : habits.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Ionicons
+              name="leaf-outline"
+              size={40}
+              color="#94A3B8"
+            />
+
+            <Text style={styles.emptyText}>
+              Cadastre um hábito para configurar seus lembretes.
             </Text>
-
-            <View style={styles.timePicker}>
-              <View style={styles.timeControl}>
-                <Pressable
-                  style={styles.timeButton}
-                  onPress={() => changeHour(1)}
-                  disabled={saving}
-                >
-                  <Ionicons
-                    name="chevron-up"
-                    size={24}
-                    color="#2563EB"
-                  />
-                </Pressable>
-
-                <Text style={styles.timeNumber}>
-                  {formatTime(selectedHour)}
-                </Text>
-
-                <Pressable
-                  style={styles.timeButton}
-                  onPress={() => changeHour(-1)}
-                  disabled={saving}
-                >
-                  <Ionicons
-                    name="chevron-down"
-                    size={24}
-                    color="#2563EB"
-                  />
-                </Pressable>
-              </View>
-
-              <Text style={styles.timeSeparator}>:</Text>
-
-              <View style={styles.timeControl}>
-                <Pressable
-                  style={styles.timeButton}
-                  onPress={() => changeMinute(1)}
-                  disabled={saving}
-                >
-                  <Ionicons
-                    name="chevron-up"
-                    size={24}
-                    color="#2563EB"
-                  />
-                </Pressable>
-
-                <Text style={styles.timeNumber}>
-                  {formatTime(selectedMinute)}
-                </Text>
-
-                <Pressable
-                  style={styles.timeButton}
-                  onPress={() => changeMinute(-1)}
-                  disabled={saving}
-                >
-                  <Ionicons
-                    name="chevron-down"
-                    size={24}
-                    color="#2563EB"
-                  />
-                </Pressable>
-              </View>
-            </View>
-
-            <View style={styles.infoBox}>
-              <Ionicons
-                name="information-circle-outline"
-                size={20}
-                color="#2563EB"
-              />
-              <Text style={styles.infoText}>
-                Horário selecionado: {formatTime(selectedHour)}:
-                {formatTime(selectedMinute)}
-              </Text>
-            </View>
           </View>
-        )}
-
-        {saving && (
-          <View style={styles.feedbackRow}>
-            <ActivityIndicator size="small" color="#2563EB" />
-            <Text style={styles.feedbackText}>
-              Salvando lembrete...
-            </Text>
+        ) : (
+          <View style={styles.habitsList}>
+            {habits.map(renderHabit)}
           </View>
         )}
 
         {message !== '' && (
-          <Text style={styles.feedbackText}>
-            {message}
-          </Text>
+          <View style={styles.messageBox}>
+            <Text style={styles.messageText}>
+              {message}
+            </Text>
+          </View>
         )}
       </View>
 
@@ -335,6 +534,7 @@ export default function SettingsScreen() {
             <Text style={styles.sectionTitle}>
               Plataforma
             </Text>
+
             <Text style={styles.sectionDescription}>
               {Platform.OS === 'android'
                 ? 'Aplicativo Android'
@@ -352,6 +552,7 @@ export default function SettingsScreen() {
           size={22}
           color="#16A34A"
         />
+
         <Text style={styles.footerText}>
           HabitGo — Um hábito de cada vez.
         </Text>
@@ -427,14 +628,51 @@ const styles = StyleSheet.create({
     marginTop: 5,
     lineHeight: 18,
   },
+  habitsList: {
+    marginTop: 20,
+    gap: 12,
+  },
+  habitCard: {
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 14,
+    backgroundColor: '#FFFFFF',
+  },
+  habitHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  habitIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  habitInfo: {
+    flex: 1,
+  },
+  habitName: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#1E293B',
+  },
+  habitStatus: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 4,
+  },
   timeSection: {
+    marginTop: 16,
+    paddingTop: 14,
     borderTopWidth: 1,
     borderTopColor: '#E2E8F0',
-    marginTop: 20,
-    paddingTop: 20,
   },
   timeTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
     color: '#1E293B',
     textAlign: 'center',
@@ -443,8 +681,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 18,
-    marginBottom: 18,
+    marginVertical: 16,
     gap: 12,
   },
   timeControl: {
@@ -452,53 +689,71 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   timeButton: {
-    width: 48,
-    height: 36,
-    borderRadius: 10,
+    width: 46,
+    height: 34,
+    borderRadius: 9,
     backgroundColor: '#EFF6FF',
     alignItems: 'center',
     justifyContent: 'center',
   },
   timeNumber: {
-    fontSize: 36,
+    fontSize: 32,
     fontWeight: 'bold',
     color: '#1E293B',
-    minWidth: 65,
+    minWidth: 62,
     textAlign: 'center',
   },
   timeSeparator: {
-    fontSize: 34,
+    fontSize: 30,
     fontWeight: 'bold',
     color: '#64748B',
   },
-  infoBox: {
+  saveButton: {
+    backgroundColor: '#2563EB',
+    borderRadius: 10,
+    paddingVertical: 11,
     flexDirection: 'row',
+    justifyContent: 'center',
     alignItems: 'center',
     gap: 8,
+  },
+  saveButtonDisabled: {
+    backgroundColor: '#94A3B8',
+  },
+  saveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  notice: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 16,
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    paddingVertical: 28,
+    gap: 12,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#64748B',
+    textAlign: 'center',
+  },
+  messageBox: {
     backgroundColor: '#EFF6FF',
     borderRadius: 10,
     padding: 12,
+    marginTop: 16,
   },
-  infoText: {
-    flex: 1,
+  messageText: {
     fontSize: 13,
     color: '#1D4ED8',
   },
-  feedbackRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 12,
-  },
-  feedbackText: {
-    fontSize: 13,
-    color: '#64748B',
-    marginTop: 12,
-  },
-  webNotice: {
-    fontSize: 12,
-    color: '#64748B',
-    marginTop: 14,
+  errorText: {
+    color: '#DC2626',
+    fontSize: 14,
+    marginTop: 16,
   },
   footer: {
     alignItems: 'center',
