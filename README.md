@@ -85,25 +85,33 @@ O HabitGo possui quatro telas principais, desenvolvidas para facilitar a organiz
 
 A tela inicial apresenta os hábitos do dia e permite marcar as atividades concluídas. Também exibe uma barra de progresso com a quantidade de hábitos realizados e pendentes.
 
-![Tela inicial do HabitGo](assets/screenshots/inicio.png)
+<p align="center">
+  <img src="assets/inicio.png" alt="Tela inicial do HabitGo" width="280">
+</p>
 
 ### 2. Hábitos — Gerenciamento
 
 Nesta tela, o usuário pode visualizar os hábitos cadastrados, adicionar novos hábitos e editar os registros existentes.
 
-![Tela de gerenciamento de hábitos](assets/screenshots/habitos.png)
+<p align="center">
+  <img src="assets/habitos.png" alt="Tela de gerenciamento de hábitos" width="280">
+</p>
 
 ### 3. Progresso — Acompanhamento
 
 A tela de progresso apresenta indicadores sobre o desempenho do usuário, incluindo hábitos concluídos, percentual de progresso diário, dias de sequência e quantidade de hábitos cadastrados.
 
-![Tela de progresso do HabitGo](assets/screenshots/progresso.png)
+<p align="center">
+  <img src="assets/progresso.png" alt="Tela de progresso do HabitGo" width="280">
+</p>
 
 ### 4. Configurações — Notificações
 
 A tela de configurações permite ativar ou desativar lembretes individuais e definir um horário específico para cada hábito.
 
-![Tela de configurações do HabitGo](assets/screenshots/configuracoes.png)
+<p align="center">
+  <img src="assets/configuracoes.png" alt="Tela de configurações do HabitGo" width="280">
+</p>
 
 ---
 
@@ -208,12 +216,10 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-
     match /users/{userId}/habits/{habitId} {
       allow read, write: if request.auth != null
         && request.auth.uid == userId;
     }
-
   }
 }
 ```
